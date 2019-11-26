@@ -1,5 +1,7 @@
 import tensorflow as tf
 import numpy as np
+from preprocess import get_data
+import pypianoroll
 
 
 class Model(tf.keras.Model):
@@ -22,7 +24,7 @@ class Model(tf.keras.Model):
 
         self.lstm_1 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=True, return_state=True)
         self.lstm_2 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=False, return_state=False)
-        # self.dense1 = tf.keras.layers.Dense(units=self.dense1_size, activation=tf.nn.relu, use_bias=True)
+
         self.dense_1 = tf.keras.layers.Dense(units=self.note_range, activation=tf.nn.relu, use_bias=True)
         self.dense_2 = tf.keras.layers.Dense(units=self.note_range, activation=tf.nn.softmax, use_bias=True)
 
@@ -54,9 +56,6 @@ def train(model, train_inputs, train_labels):
 
     n = len(train_inputs)
 
-    #indices = tf.random.shuffle(list(range(n)))
-    #train_labels = tf.gather(train_labels, indices, axis=0)
-
     num_batches = n // model.batch_size
 
     for i in range(num_batches):
@@ -77,7 +76,10 @@ def test(model, test_inputs, test_labels):
     return tf.math.exp(loss).numpy()
 
 def main():
-    model = Model(100, 20)
+    data = get_data("clean_midi/Bach Johann Sebastian")
+    print(len(data))
+    print(data[0])
+    #model = Model(100, 20)
     #need some data for the model, I'll work on this tm
     pass
 
