@@ -5,7 +5,7 @@ import pypianoroll
 
 
 class Model(tf.keras.Model):
-    def __init__(self, note_range, window_size):
+    def __init__(self):
         super(Model, self).__init__()
 
         self.window_size = 10
@@ -13,10 +13,10 @@ class Model(tf.keras.Model):
         # 1) Define any hyperparameters
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.99, epsilon=1e-8)
 
-        self.note_range = 100
+        self.note_range = 150
 
         # TODO: change back to reasonable batch size when we fix data
-        self.batch_size = 100
+        self.batch_size = 128
 
         self.embedding_size = 50
         self.rnn_size = 64
@@ -33,37 +33,36 @@ class Model(tf.keras.Model):
 
 
     def call(self, inputs, initial_state):
-        # replaced input from note_range to inputs -- not sure what note range was?
-        print("in call, inputs: " + str(inputs.shape))
-        embedding = self.note_embedding(inputs)
-        print("embedding:" + str(embedding.shape))
-        lstm_out_1, last_output, last_state = self.lstm_1(embedding, initial_state)
-        #not 100% sure abt the inital state stuff/if it even makes sense to pass between LSTM layers
-        lstm_out_2 = self.lstm_2(lstm_out_1) #, initial_sate=(last_output, last_state))
 
-        dense_out_1 = self.dense_1(lstm_out_2)
-        notes = self.dense_2(dense_out_1)
+        #print("in call, inputs: " + str(inputs.shape))
+        embedding = self.note_embedding(inputs)
+        #print("embedding:" + str(embedding.shape))
+        lstm_out_1, last_output, last_state = self.lstm_1(embedding, initial_state)
+        #print("lstm out 1", lstm_out_1.shape)
+        #not 100% sure abt the inital state stuff/if it even makes sense to pass between LSTM layers
+        #lstm_out_2 = self.lstm_2(lstm_out_1) #, initial_sate=(last_output, last_state))
+        #print("lstm out 2", lstm_out_2.shape)
+
+        dense_out_1 = self.dense_1(lstm_out_1)
+        #print("dense out 1", dense_out_1.shape)
+        #notes = self.dense_2(dense_out_1)
+        #print("dense out 2", notes.shape)
+        notes = dense_out_1
         return notes
 
 
     def loss(self, logits, labels):
         """so the labels here are probably just the next note, right?
         """
-        l = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(y_true=labels, y_pred=logits))
+        l = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(labels, logits))
         return l
 
 
 def train(model, train_inputs, train_labels):
     w = model.window_size
 
-    #assumes offset of 1 between inputs and labels--potentially not the move?
-    # i think we can just handle this in main when seperating labels?
-    #inputs = [train_inputs[i:i+w] for i in range(0, len(train_inputs)-w, w)]
-    #labels = [train_labels[i:i+w] for i in range(0, len(train_labels)-w, w)]
-
     n = len(train_inputs)
     num_batches = n // model.batch_size
-
 
     #indices = tf.random.shuffle(np.arange(n))
     #train_inputs = tf.gather(train_inputs, indices)
@@ -76,10 +75,6 @@ def train(model, train_inputs, train_labels):
         labels = labels[0]
         with tf.GradientTape() as tape:
             probs = model.call(inputs, None)
-            print("probs", probs.shape)
-            print("inputs", inputs.shape)
-            print("labels", labels.shape)
-
             loss = model.loss(probs, labels)
 
         gradients = tape.gradient(loss, model.trainable_variables)
@@ -97,11 +92,13 @@ def main():
     print(data[0])
 
 
+
     model = Model()
 
     #TODO: need to seperate into train and test
     train_data = data
 
+    #print(np.max(np.any(data.any)))
     train_inputs =[]
     train_labels = []
     for track in train_data:
@@ -113,8 +110,7 @@ def main():
     train_labels = np.asarray(train_labels)
 
 
-    #train_inputs = np.expand_dims(train_inputs, -1)
-    #train_labels = np.expand_dims(train_labels, -1)
+    print(np.max(train_inputs))
 
     print("inputs:")
     print(train_inputs.shape)
@@ -125,9 +121,6 @@ def main():
     train_labels = tf.convert_to_tensor(train_labels)
 
     train(model, train_inputs, train_labels)
-
-
-
 
 if __name__ == '__main__':
     #parameterize this func to handle multiple tracks.
