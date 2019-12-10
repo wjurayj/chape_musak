@@ -13,7 +13,7 @@ class Model(tf.keras.Model):
         # 1) Define any hyperparameters
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.99, epsilon=1e-8)
 
-        self.note_range = 150
+        self.note_range = 128
 
         # TODO: change back to reasonable batch size when we fix data
         self.batch_size = 128
@@ -47,8 +47,8 @@ class Model(tf.keras.Model):
         #print("dense out 1", dense_out_1.shape)
         #notes = self.dense_2(dense_out_1)
         #print("dense out 2", notes.shape)
-        notes = dense_out_1
-        return notes
+        notes = self.dense_2(dense_out_1)
+        return notes, (last_output, last_state)
 
 
     def loss(self, logits, labels):
@@ -62,8 +62,10 @@ def train(model, train_inputs, train_labels):
     w = model.window_size
 
     n = len(train_inputs)
+    print("n", n)
     num_batches = n // model.batch_size
 
+    print("num batches", num_batches)
     #indices = tf.random.shuffle(np.arange(n))
     #train_inputs = tf.gather(train_inputs, indices)
     #train_labels = tf.gather(train_labels, indices)
@@ -74,24 +76,96 @@ def train(model, train_inputs, train_labels):
         inputs = inputs[0]
         labels = labels[0]
         with tf.GradientTape() as tape:
-            probs = model.call(inputs, None)
+            probs = model.call(inputs, None)[0]
             loss = model.loss(probs, labels)
 
         gradients = tape.gradient(loss, model.trainable_variables)
         model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-        if i % (num_batches // 100) == 0:
-            print('batch accuracy:', test(model, inputs, labels))
+        if i % (num_batches // 500) == 0:
+            print('batch perplexity:', test(model, inputs, labels))
 
 def test(model, test_inputs, test_labels):
-    loss = model.loss(model.call(test_inputs, None),test_labels)
+    loss = model.loss(model.call(test_inputs, None)[0],test_labels)
     return tf.math.exp(loss).numpy()
+
+
+def make_musak(model, starting_notes, length):
+    #reverse_vocab = {idx:word for word, idx in vocab.items()}
+    previous_state = None
+    previous_state_n = None
+    previous_state_u = None
+
+    first_note = starting_notes[0]
+
+    #first_word_index = vocab[word1]
+    #next_input = [[first_word_index]]
+    print("first note", first_note)
+    next_input = starting_notes # [[first_note]]
+    next_input_n = starting_notes
+    next_input_u = starting_notes
+    print("next input", next_input)
+    song = np.asarray(starting_notes)
+    song_n = np.asarray(starting_notes)
+    song_u = np.asarray(starting_notes)
+    threshold = 0.3
+    mu = 0.15
+    sigma = 0.1
+    volume = 60
+    yes = np.ones(model.note_range)*volume
+    no = np.zeros(model.note_range)
+    print('length', length)
+    for i in range(length):
+        logits, previous_state = model.call(song[-length:-1], previous_state)
+        logits_n, previous_state_n = model.call(song_n[-length:-1], previous_state_n)
+        logits_u, previous_state_u = model.call(song_u[-length:-1], previous_state_u)
+
+        print("done")
+        # out_index = np.argmax(np.array(logits[0][0]))
+
+        # song.append(out_index)
+        # print(out_index)
+        print(logits.shape)
+        #print(logits[0])
+
+        note = np.where(logits[0][0].numpy() > threshold, yes, no)
+        note_n = np.where(logits_n[0][0].numpy() > np.random.normal(mu, sigma, size=model.note_range), yes, no)
+        note_u = np.where(logits_n[0][0].numpy() > np.random.uniform(0, threshold, size=model.note_range), yes, no)
+        # choice = np.random.choice(model.note_range, p=logits[0][0].numpy()) #index into logits?
+        # note = tf.one_hot(choice, model.note_range)
+        print("note", note.shape)
+        # next_input = np.append(starting_notes, [note], axis =0)[-length:-1]
+        # next_input_n = np.append(starting_notes, [note_n], axis =0)[-length:-1]
+        # next_input_u = np.append(starting_notes, [note_u], axis =0)[-length:-1]
+
+        #next_input = tf.expand_dims(note, axis=0)
+        print("next input", next_input.shape)
+        song = np.append(song, [note], axis = 0)
+        song_n = np.append(song_n, [note_n], axis = 0)
+        song_u = np.append(song_u, [note_u], axis = 0)
+
+    #song = np.asarray(song)
+
+    print("song", song.shape)
+    print(song)
+    t = pypianoroll.Track(song)
+    multi = pypianoroll.Multitrack(name="song", tracks = [t])
+    #pypianoroll.save("./song.midi", multi)
+    multi.write('./song.mid')
+    #print(" ".join(song))
+    t = pypianoroll.Track(song_n)
+    multi = pypianoroll.Multitrack(name="song", tracks = [t])
+    #pypianoroll.save("./song.midi", multi)
+    multi.write('./song_n.mid')
+    t = pypianoroll.Track(song_u)
+    multi = pypianoroll.Multitrack(name="song", tracks = [t])
+    #pypianoroll.save("./song.midi", multi)
+    multi.write('./song_u.mid')
+
 
 def main():
     data = get_data("clean_midi/Bach Johann Sebastian")
     print(len(data))
     print(data[0])
-
-
 
     model = Model()
 
@@ -116,11 +190,17 @@ def main():
     print(train_inputs.shape)
     print("labels:")
     print(train_labels.shape)
-    print(train_inputs[0:10])
+    #print(train_inputs[0:10])
     train_inputs = tf.convert_to_tensor(train_inputs)
     train_labels = tf.convert_to_tensor(train_labels)
 
-    train(model, train_inputs, train_labels)
+    # train(model, train_inputs, train_labels)
+
+    output_length = 100
+    starting = train_data[0][0:output_length]
+    print("starting", starting)
+    make_musak(model, starting, output_length)
+
 
 if __name__ == '__main__':
     #parameterize this func to handle multiple tracks.

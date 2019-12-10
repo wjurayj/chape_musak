@@ -5,13 +5,24 @@ import os
 
 
 def get_data(train_dir):
+    f = open("ex_tracks", "w")
+
     train_rolls = []
     for filename in os.listdir(train_dir):
         if filename.endswith('.mid'):
             multi = pypianoroll.Multitrack(os.path.join(train_dir, filename), name=filename[:-4])
             for track in multi.tracks:
-                train_rolls.append(track.pianoroll)
+                nonzeros = np.nonzero(tf.math.reduce_sum(track.pianoroll, axis=1))[0]
+                #print(nonzeros[0])
+                #print(nonzeros[-1])
+                roll = track.pianoroll[nonzeros[0]:nonzeros[-1],0:128]
+
+                train_rolls.append(roll)
+                #print(np.sum(roll))
+                f.write(str(roll))
                 #batch tracks from the same midi together?
+    f.close()
+    #assert(False)
     return train_rolls
 
 
