@@ -16,7 +16,7 @@ def get_data(train_dir):
                 #print(nonzeros[0])
                 #print(nonzeros[-1])
                 roll = track.pianoroll[nonzeros[0]:nonzeros[-1],0:128]
-
+                roll = np.where(roll > 0, 1, 0)
                 train_rolls.append(roll)
                 #print(np.sum(roll))
                 f.write(str(roll))

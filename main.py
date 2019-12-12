@@ -2,13 +2,14 @@ import tensorflow as tf
 import numpy as np
 from preprocess import get_data
 import pypianoroll
+import os
 
 
 class Model(tf.keras.Model):
     def __init__(self):
         super(Model, self).__init__()
 
-        self.window_size = 10
+        self.window_size = 15
         # TODO:
         # 1) Define any hyperparameters
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.99, epsilon=1e-8)
@@ -16,45 +17,50 @@ class Model(tf.keras.Model):
         self.note_range = 128
 
         # TODO: change back to reasonable batch size when we fix data
-        self.batch_size = 128
+        self.batch_size = 50
 
-        self.embedding_size = 50
-        self.rnn_size = 64
+        # self.embedding_size = 50
+        self.rnn_size = 128
         self.hidden_size = 64
 
         # 2) Define embeddings, encoder, decoder, and feed forward layers
-        self.note_embedding = tf.keras.layers.Embedding(self.note_range, self.embedding_size, input_length=self.window_size)
+        #self.note_embedding = tf.keras.layers.Embedding(self.note_range, self.embedding_size, input_length=self.window_size)
 
-        self.lstm_1 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=True, return_state=True)
-        self.lstm_2 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=False, return_state=False)
+        self.lstm_1 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=True, return_state=True, dtype=tf.float32)
+        self.lstm_2 = tf.keras.layers.LSTM(units=self.rnn_size, return_sequences=True, return_state=True)
 
         self.dense_1 = tf.keras.layers.Dense(units=self.note_range, activation=tf.nn.relu, use_bias=True)
-        self.dense_2 = tf.keras.layers.Dense(units=self.note_range, activation=tf.nn.softmax, use_bias=True)
+        self.dense_2 = tf.keras.layers.Dense(units=self.note_range, activation=tf.nn.sigmoid, use_bias=True)
 
 
     def call(self, inputs, initial_state):
 
+        inputs = tf.cast(inputs, tf.float32)
         #print("in call, inputs: " + str(inputs.shape))
-        embedding = self.note_embedding(inputs)
+        #embedding = self.note_embedding(inputs)
+        #print('inputs:', inputs.shape)
         #print("embedding:" + str(embedding.shape))
-        lstm_out_1, last_output, last_state = self.lstm_1(embedding, initial_state)
+        lstm_out_1, last_output_1, last_state_1 = self.lstm_1(inputs, initial_state)
         #print("lstm out 1", lstm_out_1.shape)
         #not 100% sure abt the inital state stuff/if it even makes sense to pass between LSTM layers
-        #lstm_out_2 = self.lstm_2(lstm_out_1) #, initial_sate=(last_output, last_state))
+        lstm_out_2, last_output_2, last_state_2 = self.lstm_2(inputs, (last_output_1, last_state_1)) #, initial_sate=(last_output, last_state))
         #print("lstm out 2", lstm_out_2.shape)
 
-        dense_out_1 = self.dense_1(lstm_out_1)
+        dense_out_1 = self.dense_1(tf.concat([lstm_out_1, lstm_out_2], axis=2))
         #print("dense out 1", dense_out_1.shape)
         #notes = self.dense_2(dense_out_1)
         #print("dense out 2", notes.shape)
         notes = self.dense_2(dense_out_1)
-        return notes, (last_output, last_state)
+
+        #print("notes shape", notes.shape)
+        return notes, (last_output_2, last_state_2)
 
 
     def loss(self, logits, labels):
         """so the labels here are probably just the next note, right?
         """
-        l = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(labels, logits))
+
+        l = tf.reduce_mean(tf.keras.losses.binary_crossentropy(labels, logits))
         return l
 
 
@@ -73,16 +79,18 @@ def train(model, train_inputs, train_labels):
     for i in range(num_batches):
         inputs = train_inputs[i*model.batch_size:(i+1)*model.batch_size]
         labels = train_labels[i*model.batch_size:(i+1)*model.batch_size]
-        inputs = inputs[0]
-        labels = labels[0]
+        # inputs = inputs[0]
+        # labels = labels[0]
         with tf.GradientTape() as tape:
             probs = model.call(inputs, None)[0]
             loss = model.loss(probs, labels)
 
         gradients = tape.gradient(loss, model.trainable_variables)
         model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-        if i % (num_batches // 500) == 0:
+        if i % (num_batches // 10) == 0:
+            print("probs shape", probs.shape)
             print('batch perplexity:', test(model, inputs, labels))
+            print("loss", loss)
 
 def test(model, test_inputs, test_labels):
     loss = model.loss(model.call(test_inputs, None)[0],test_labels)
@@ -91,56 +99,55 @@ def test(model, test_inputs, test_labels):
 
 def make_musak(model, starting_notes, length):
     #reverse_vocab = {idx:word for word, idx in vocab.items()}
+    print("composing...")
+
     previous_state = None
     previous_state_n = None
     previous_state_u = None
 
-    first_note = starting_notes[0]
-
-    #first_word_index = vocab[word1]
-    #next_input = [[first_word_index]]
-    print("first note", first_note)
-    next_input = starting_notes # [[first_note]]
-    next_input_n = starting_notes
-    next_input_u = starting_notes
-    print("next input", next_input)
     song = np.asarray(starting_notes)
+    print("song shape", song.shape)
     song_n = np.asarray(starting_notes)
     song_u = np.asarray(starting_notes)
-    threshold = 0.3
-    mu = 0.15
-    sigma = 0.1
-    volume = 60
-    yes = np.ones(model.note_range)*volume
-    no = np.zeros(model.note_range)
-    print('length', length)
-    for i in range(length):
-        logits, previous_state = model.call(song[-length:-1], previous_state)
-        logits_n, previous_state_n = model.call(song_n[-length:-1], previous_state_n)
-        logits_u, previous_state_u = model.call(song_u[-length:-1], previous_state_u)
 
-        print("done")
+    note = song[-1]
+    note_n = song[-1]
+    note_u = song[-1]
+    threshold = 0.8
+    mu = 0.85
+    sigma = 0.05
+    volume = 60
+
+    print('length', length)
+    for i in range(length+1):
+        #print("note shape", note.shape)
+        #print(np.expand_dims(np.expand_dims(note, axis=0), axis=0).shape)
+        # expanded = np.expand_dims(np.expand_dims(note, axis=0), axis=0)
+        logits, previous_state = model.call(np.expand_dims(song[-model.window_size: -1], axis=0), previous_state)
+        # logits_n, previous_state_n = model.call(song_n[np.newaxis,:], previous_state_n)
+        logits_u, previous_state_u = model.call(np.expand_dims(song_u[-model.window_size: -1], axis=0), previous_state_u)
         # out_index = np.argmax(np.array(logits[0][0]))
 
+        #print("note 2", note.shape)
         # song.append(out_index)
         # print(out_index)
-        print(logits.shape)
+        print("logits", logits.shape)
         #print(logits[0])
 
-        note = np.where(logits[0][0].numpy() > threshold, yes, no)
-        note_n = np.where(logits_n[0][0].numpy() > np.random.normal(mu, sigma, size=model.note_range), yes, no)
-        note_u = np.where(logits_n[0][0].numpy() > np.random.uniform(0, threshold, size=model.note_range), yes, no)
-        # choice = np.random.choice(model.note_range, p=logits[0][0].numpy()) #index into logits?
-        # note = tf.one_hot(choice, model.note_range)
-        print("note", note.shape)
-        # next_input = np.append(starting_notes, [note], axis =0)[-length:-1]
-        # next_input_n = np.append(starting_notes, [note_n], axis =0)[-length:-1]
-        # next_input_u = np.append(starting_notes, [note_u], axis =0)[-length:-1]
+        choice = np.argmax(logits[-1][0].numpy())
+        print("max val of logits", np.max(logits[-1][0].numpy()))
+        note = np.zeros(model.note_range)
+        note[choice] = volume
+
+
+        # note_n = np.where(logits_n[-1][0].numpy() > np.random.normal(mu, sigma, size=model.note_range), volume, 0)
+        note_u = np.where(logits_u[-1][0] > threshold, volume, 0)
+
+        print("note:", np.nonzero(note), "note_u:", np.nonzero(note_u)) #, "note_n:", np.nonzero(note_n))
 
         #next_input = tf.expand_dims(note, axis=0)
-        print("next input", next_input.shape)
         song = np.append(song, [note], axis = 0)
-        song_n = np.append(song_n, [note_n], axis = 0)
+        # song_n = np.append(song_n, [note_n], axis = 0)
         song_u = np.append(song_u, [note_u], axis = 0)
 
     #song = np.asarray(song)
@@ -152,10 +159,10 @@ def make_musak(model, starting_notes, length):
     #pypianoroll.save("./song.midi", multi)
     multi.write('./song.mid')
     #print(" ".join(song))
-    t = pypianoroll.Track(song_n)
-    multi = pypianoroll.Multitrack(name="song", tracks = [t])
-    #pypianoroll.save("./song.midi", multi)
-    multi.write('./song_n.mid')
+    # t = pypianoroll.Track(song_n)
+    # multi = pypianoroll.Multitrack(name="song", tracks = [t])
+    # #pypianoroll.save("./song.midi", multi)
+    # multi.write('./song_n.mid')
     t = pypianoroll.Track(song_u)
     multi = pypianoroll.Multitrack(name="song", tracks = [t])
     #pypianoroll.save("./song.midi", multi)
@@ -163,16 +170,16 @@ def make_musak(model, starting_notes, length):
 
 
 def main():
-    data = get_data("clean_midi/Bach Johann Sebastian")
-    print(len(data))
-    print(data[0])
-
+    data = get_data("clean_midi/classical")
     model = Model()
 
-    #TODO: need to seperate into train and test
+    checkpoint_dir = './checkpoints'
+    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+    checkpoint = tf.train.Checkpoint(model=model, optimizer=model.optimizer)
+    manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=3)
+
     train_data = data
 
-    #print(np.max(np.any(data.any)))
     train_inputs =[]
     train_labels = []
     for track in train_data:
@@ -182,22 +189,25 @@ def main():
 
     train_inputs = np.asarray(train_inputs)
     train_labels = np.asarray(train_labels)
+    #train_labels = np.where(train_labels > 0, 1, 0)
 
-
-    print(np.max(train_inputs))
-
-    print("inputs:")
-    print(train_inputs.shape)
-    print("labels:")
-    print(train_labels.shape)
-    #print(train_inputs[0:10])
     train_inputs = tf.convert_to_tensor(train_inputs)
     train_labels = tf.convert_to_tensor(train_labels)
+    test = False
+    if test:
+        print("restoring previous checkpoint instead of training")
+        checkpoint.restore(manager.latest_checkpoint)
+    else:
+        print("training...")
+        num_epochs = 1
+        for ep in range(num_epochs):
+            train(model, train_inputs, train_labels)
+        manager.save()
 
-    # train(model, train_inputs, train_labels)
-
-    output_length = 100
-    starting = train_data[0][0:output_length]
+    output_length = 300
+    starting = train_data[0][0:model.window_size]
+    first_note = np.zeros(model.note_range)
+    first_note[64] = 60
     print("starting", starting)
     make_musak(model, starting, output_length)
 
